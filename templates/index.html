@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="fr" data-theme="dark">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Moovly — Optimisation de Flotte SaaS</title>
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico?v=1">
+</head>
+
+<body>
+    <div id="app-container">
+        <!-- GLOBAL SIDEBAR -->
+        <nav class="main-nav">
+            <div class="nav-brand">
+                <img src="/static/Logo.png" class="nav-logo-img" alt="Moovly">
+            </div>
+            <div class="nav-links">
+                <button class="nav-item active" id="nav-btn-planning" title="Planning & Map">
+                    <i class="ph ph-map-trifold"></i>
+                </button>
+                <button class="nav-item" id="nav-btn-dashboard" title="Dashboard RSE">
+                    <i class="ph ph-chart-pie-slice"></i>
+                </button>
+                <button class="nav-item" id="nav-btn-params" title="Paramètres">
+                    <i class="ph ph-sliders-horizontal"></i>
+                </button>
+            </div>
+            <div class="nav-bottom">
+                <button class="nav-item" id="theme-toggle" title="Thème">
+                    <i class="ph ph-moon"></i>
+                </button>
+            </div>
+        </nav>
+
+        <!-- MAIN CONTENT -->
+        <main id="main-content">
+            
+            <!-- ================= VIEW: PLANNING ================= -->
+            <div id="view-planning" class="view active">
+                <aside id="sub-sidebar" class="sub-sidebar">
+                    <nav class="stepper-nav">
+                        <div class="step active" id="step-1"><span class="step-num">1</span><span class="step-label">Importer</span></div>
+                        <div class="step-line"></div>
+                        <div class="step" id="step-2"><span class="step-num">2</span><span class="step-label">Configurer</span></div>
+                        <div class="step-line"></div>
+                        <div class="step" id="step-3"><span class="step-num">3</span><span class="step-label">Résultats</span></div>
+                    </nav>
+
+                    <div class="panel-container">
+                        <!-- PANEL 1 -->
+                        <div class="panel active" id="panel-1">
+                            <div class="panel-section">
+                                <div class="section-title"><i class="ph ph-users"></i> Employés</div>
+                                <div class="upload-wrapper">
+                                    <label class="upload-card" id="upload-employes">
+                                        <span class="upload-icon"><i class="ph ph-file-xls"></i></span>
+                                        <span class="upload-info">
+                                            <span class="upload-label">Adresses des Employés (.xlsx)</span>
+                                        </span>
+                                        <span class="upload-status"><span class="upload-badge" id="badge-employes">—</span></span>
+                                        <input type="file" class="upload-input" accept=".xlsx,.xls" data-type="employes">
+                                    </label>
+                                    <button class="btn-pin-manual" data-type="employes"><i class="ph ph-map-pin-plus"></i> Placer manuellement</button>
+                                </div>
+                            </div>
+                            <div class="panel-section">
+                                <div class="section-title"><i class="ph ph-map-pin"></i> Destination Finale</div>
+                                <div class="section-hint" style="font-size: 11px; margin-bottom: 8px;">
+                                    Cherchez une adresse sur la carte, puis cliquez sur ce bouton <br> pour la placer :
+                                </div>
+                                <button class="btn-pin-manual" data-type="destinations" style="width:100%;"><i class="ph ph-map-pin-plus"></i> Définir sur la carte</button>
+                                <div id="destination-info" style="font-size: 12px; margin-bottom: 12px; font-weight: 600; color: #10b981;"></div>
+                            </div>
+                            <button class="btn btn-primary mt-auto" id="btn-go-step2" disabled>Continuer <i class="ph ph-arrow-right"></i></button>
+                            <!-- Bouton de Réinitialisation -->
+                                <button id="btn-reset-platform" class="btn btn-outline btn-sm w-100" style="background: transparent; margin-bottom: 15px; color: #ef4444; border: 2px solid rgba(239, 68, 68, 0.4); margin-top: 15px;">
+                                    <i class="ph ph-trash-simple"></i> Réinitialiser
+                                </button>
+                        </div>
+
+                        <!-- PANEL 2 -->
+                        <div class="panel" id="panel-2">
+                            <div class="panel-section">
+                                <div class="section-title">Employés à inclure</div>
+                                <div class="select-actions">
+                                    <button class="btn-link" id="select-all-emp">Tout</button>
+                                    <button class="btn-link" id="deselect-all-emp">Aucun</button>
+                                </div>
+                                <div class="emp-list" id="emp-list"></div>
+                            </div>
+                            <div class="panel-section" style="display: none;">
+                                <div class="section-title">Destination</div>
+                                <select class="form-select" id="dest-select"><option value="">— Choisir —</option></select>
+                            </div>
+                            <div class="panel-section">
+            <div class="section-title">Capacité de la Flotte</div>
+            
+            <div style="display:flex; gap:8px; margin-bottom:12px; background: var(--bg-hover); padding: 4px; border-radius: 8px; border: 1px solid var(--border);">
+                <button class="btn btn-sm w-100" id="btn-mode-fixe" style="background: var(--surface); color: var(--text-primary); border: 1px solid var(--border); box-shadow: 0 2px 5px rgba(0,0,0,0.1);">Mode Fixe</button>
+                <button class="btn btn-sm w-100" id="btn-mode-ia" style="background: transparent; color: var(--text-muted); border: 1px solid transparent; box-shadow: none;"><i class="ph ph-sparkle text-purple"></i> Laisser le systéme décide</button>
+            </div>
+
+            <div id="wrapper-cap-fixe">
+                <input type="number" class="form-select" id="taxi-capacity" value="4" min="1" max="10">
+                <div class="section-hint mt-2" style="font-size: 11px;">Tous les taxis auront cette capacité exacte.</div>
+            </div>
+
+            <div id="wrapper-cap-ia" class="hidden">
+                <div style="padding: 10px; height: 100px; background: rgba(139, 92, 246, 0.1); border: 1px solid rgba(139, 92, 246, 0.3); margin-bottom: 10px; border-radius: 8px; font-size: 12px; color: #c4b5fd; line-height: 1.5;">
+                    <i class="ph ph-brain"></i> <p>Le modèle ML analysera la densité et la topologie </br> des employés pour prédire le mix optimal de </br> véhicules (flotte hétérogène).</p>
+                </div>
+            </div>
+        </div>
+                            
+                            <div class="btn-row mt-auto">
+                                <button class="btn btn-outline btn-sm" id="btn-back-step1"><i class="ph ph-arrow-left"></i> Retour</button>
+                                <button class="btn btn-primary btn-sm" id="btn-run" disabled><i class="ph ph-rocket-launch"></i> Lancer</button>
+                            </div>
+                        </div>
+
+                        <!-- PANEL 3 -->
+                        <div class="panel" id="panel-3">
+                            <div class="section-title"><i class="ph ph-path"></i> Optimisation</div>
+                            <div id="strategies-list"></div>
+                            <div id="suggestions-list" class="suggestions-scroller"></div>
+                            
+                            <div class="form-check mt-3 glass-card">
+                                <input type="checkbox" id="heatmap-toggle">
+                                <label for="heatmap-toggle"><i class="ph ph-map-trifold"></i> Afficher Heatmap</label>
+                            </div>
+                            
+                            <div class="action-stack mt-auto">
+                                <button class="btn btn-primary btn-sm" id="btn-goto-dashboard"><i class="ph ph-chart-pie-slice"></i> Ouvrir Dashboard RSE</button>
+                                <button class="btn btn-outline btn-sm" id="btn-simulate-taxis" style="display:none;"><i class="ph ph-play-circle"></i> Simuler Taxis</button>
+                                <button class="btn btn-outline btn-sm" id="btn-unfocus-routes" style="display:none;"><i class="ph ph-arrows-out"></i> Vue globale</button>
+                                <button class="btn btn-outline btn-sm" id="btn-export"><i class="ph ph-file-xls"></i> Exporter Excel</button>
+                                <button class="btn btn-outline btn-sm" id="btn-new"><i class="ph ph-arrow-left"></i> Nouvelle optimisation</button>
+                                <!-- Boutons cachés pour compatibilité app.js -->
+                                <button id="btn-show-rse" style="display:none;"></button>
+                                <button id="btn-show-comparator" style="display:none;"></button>
+                                <button id="btn-back-rse" style="display:none;"></button>
+                                <button id="btn-back-comparator" style="display:none;"></button>
+                            </div>
+                        </div>
+                    </div>
+                </aside>
+                
+                <button id="sidebar-toggler" class="sidebar-toggler"><i class="ph ph-caret-left"></i></button>
+
+                <div class="map-wrapper">
+                    <div id="map"></div>
+                    <div class="map-legend glass-card">
+                        <div class="legend-item"><span class="legend-dot bg-green"></span> Employés</div>
+                        <div class="legend-item"><span class="legend-dot bg-red"></span> Destination</div>
+                    </div>
+                    
+                    <!-- Erreurs Géocodage Pop-up -->
+                    <div id="geocode-errors-container" class="geocode-errors-container hidden">
+                        <button id="geocode-error-btn" class="geocode-error-btn" title="Adresses non trouvées">
+                            <i class="ph ph-warning-circle text-red" style="font-size: 24px;"></i>
+                            <span id="geocode-error-badge" class="error-badge">0</span>
+                        </button>
+                        <div id="geocode-error-popup" class="geocode-error-popup hidden glass-card">
+                            <div class="popup-header">
+                                <i class="ph ph-warning"></i> Adresses non trouvées
+                            </div>
+                            <ul id="geocode-error-list" class="error-list"></ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ================= VIEW: DASHBOARD ================= -->
+            <div id="view-dashboard" class="view dashboard-layout">
+                <header class="dash-header">
+                    <div>
+                        <h1>Dashboard RSE & Comparateur</h1>
+                        <p class="text-muted">Impact écologique, opérationnel et financier</p>
+                    </div>
+                </header>
+
+                <!-- Onglets Dashboard -->
+                <div class="dash-tabs" id="dash-tabs">
+                    <button class="dash-tab active" data-tab="rse">
+                        <i class="ph ph-chart-pie-slice"></i> RSE & Métriques
+                    </button>
+                    <button class="dash-tab" data-tab="historique">
+                        <i class="ph ph-clock-counter-clockwise"></i> Historique
+                    </button>
+                </div>
+
+                <!-- Contenu onglet RSE (existant — wrapper à ajouter) -->
+                <div id="tab-rse" class="tab-content active">
+
+                <!-- KPIs -->
+                <section class="kpi-row">
+                    <div class="kpi-card glass-card">
+                        <div class="kpi-icon text-green"><i class="ph ph-leaf"></i></div>
+                        <div class="kpi-content">
+                            <div class="kpi-value" id="rse-co2-val">—</div>
+                            <div class="kpi-label">CO₂ Évité</div>
+                        </div>
+                    </div>
+                    <div class="kpi-card glass-card">
+                        <div class="kpi-icon text-blue"><i class="ph ph-coins"></i></div>
+                        <div class="kpi-content">
+                            <div class="kpi-value" id="rse-cost-val">—</div>
+                            <div class="kpi-label">Économie</div>
+                        </div>
+                    </div>
+                    <div class="kpi-card glass-card">
+                        <div class="kpi-icon text-purple"><i class="ph ph-ruler"></i></div>
+                        <div class="kpi-content">
+                            <div class="kpi-value" id="rse-dist-val">—</div>
+                            <div class="kpi-label">Km Économisés</div>
+                        </div>
+                    </div>
+                    <div class="kpi-card glass-card">
+                        <div class="kpi-icon text-amber"><i class="ph ph-package"></i></div>
+                        <div class="kpi-content">
+                            <div class="kpi-value" id="rse-fill-val">—</div>
+                            <div class="kpi-label">Remplissage</div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Projections Annuelles -->
+                <section class="dash-section">
+                    <h2 class="section-title"><i class="ph ph-calendar-blank"></i> Projections (252 Jours)</h2>
+                    <div class="projection-grid">
+                        <div class="proj-item glass-card"><div class="proj-val" id="rse-annual-co2">—</div><div class="proj-lbl">kg CO₂ / an</div></div>
+                        <div class="proj-item glass-card"><div class="proj-val" id="rse-annual-cost">—</div><div class="proj-lbl">TND / an</div></div>
+                        <div class="proj-item glass-card"><div class="proj-val" id="rse-annual-trees">—</div><div class="proj-lbl">arbres éq.</div></div>
+                        <div class="proj-item glass-card"><div class="proj-val" id="rse-annual-km">—</div><div class="proj-lbl">km / an</div></div>
+                    </div>
+                </section>
+
+                <!-- Section ROI Annuel -->
+                <section class="dash-section" id="roi-section" style="display:none;">
+                    <h2 class="section-title">
+                        <i class="ph ph-currency-circle-dollar"></i> ROI Annuel — Argumentaire Financier
+                    </h2>
+
+                    <!-- Inputs de fréquence -->
+                    <div style="display:flex; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
+                        <div style="flex:1; min-width:140px;">
+                            <label class="section-hint" style="display:block; margin-bottom:4px;">Trajets / semaine</label>
+                            <input type="number" id="roi-freq" value="5" min="1" max="14"
+                                   class="form-control" style="width:100%; border: 1px solid var(--border); background: var(--bg-main); color: var(--text-primary); padding: 8px; border-radius: var(--radius);">
+                        </div>
+                        <div style="flex:1; min-width:140px;">
+                            <label class="section-hint" style="display:block; margin-bottom:4px;">Semaines / an</label>
+                            <input type="number" id="roi-weeks" value="47" min="1" max="52"
+                                   class="form-control" style="width:100%; border: 1px solid var(--border); background: var(--bg-main); color: var(--text-primary); padding: 8px; border-radius: var(--radius);">
+                        </div>
+                    </div>
+
+                    <!-- Cards ROI -->
+                    <div class="roi-cards">
+                        <div class="roi-card">
+                            <div class="roi-period">Par trajet</div>
+                            <div class="roi-value" id="roi-val-trajet">—</div>
+                            <div class="roi-unit">TND économisés</div>
+                            <div class="roi-co2" id="roi-co2-trajet">— kg CO₂</div>
+                        </div>
+                        <div class="roi-card roi-card-accent">
+                            <div class="roi-period">Par mois</div>
+                            <div class="roi-value" id="roi-val-mois">—</div>
+                            <div class="roi-unit">TND économisés</div>
+                            <div class="roi-co2" id="roi-co2-mois">— kg CO₂</div>
+                        </div>
+                        <div class="roi-card roi-card-primary">
+                            <div class="roi-period">Par an</div>
+                            <div class="roi-value" id="roi-val-an">—</div>
+                            <div class="roi-unit">TND économisés</div>
+                            <div class="roi-co2" id="roi-co2-an">— kg CO₂</div>
+                        </div>
+                    </div>
+
+                    <!-- Phrase d'impact -->
+                    <div class="roi-impact-phrase" id="roi-phrase" style="display:none;">
+                        <i class="ph ph-info"></i>
+                        <span id="roi-phrase-text"></span>
+                    </div>
+                </section>
+
+                <!-- Charts Grid -->
+                <section class="charts-grid">
+                    <div class="chart-container glass-card">
+                        <h3 class="chart-title">CO₂ : Moovly vs Individuel</h3>
+                        <div class="chart-body"><canvas id="co2Chart"></canvas></div>
+                    </div>
+                    <div class="chart-container glass-card">
+                        <h3 class="chart-title">Répartition du Coût</h3>
+                        <div class="chart-body"><canvas id="costChart"></canvas></div>
+                    </div>
+                    <div class="chart-container glass-card span-2">
+                        <h3 class="chart-title">Utilisation de la flotte</h3>
+                        <div class="chart-body"><canvas id="fleetChart"></canvas></div>
+                    </div>
+                </section>
+
+                <!-- Comparateur -->
+                <section class="dash-section mt-4">
+                    <h2 class="section-title"><i class="ph ph-scales"></i> Comparateur de Scénarios</h2>
+                    <div class="glass-card p-4">
+                        <div class="flex-row gap-3 align-center mb-3">
+                            <span class="text-sm fw-600">Simuler :</span>
+                            <div id="cap-toggle-group" class="flex-row gap-2"></div>
+                            <button class="btn btn-primary btn-sm ml-auto" id="btn-run-compare"><i class="ph ph-play"></i> Lancer</button>
+                        </div>
+                        
+                        <div id="compare-empty" class="text-center p-4" style="color:var(--text-muted); font-size:14px; margin-top:20px;">
+                            <i class="ph ph-chart-polar" style="font-size:32px; opacity:0.5; margin-bottom:10px;"></i><br>
+                            Sélectionnez les capacités et cliquez sur <strong>Lancer</strong> pour générer la comparaison.
+                        </div>
+
+                        <div id="compare-loading" class="hidden" style="padding: 40px 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;">
+                            <div class="loader-pulse"></div>
+                            <div style="font-weight: 600; font-size: 15px; color: var(--text-primary); letter-spacing: 0.5px;">Génération des scénarios...</div>
+                            <div style="font-size: 12px; color: var(--text-muted);">Analyse de plusieurs millions de combinaisons via l'algorithme OR-Tools</div>
+                        </div>
+
+                        <div id="compare-results" class="hidden">
+                            <div class="charts-grid mt-3">
+                                <div class="chart-container glass-card"><h3 class="chart-title">Coût (TND)</h3><canvas id="compareCostChart"></canvas></div>
+                                <div class="chart-container glass-card"><h3 class="chart-title">CO₂ (kg)</h3><canvas id="compareCo2Chart"></canvas></div>
+                                <div class="chart-container glass-card"><h3 class="chart-title">Véhicules</h3><canvas id="compareVehChart"></canvas></div>
+                                <div class="chart-container glass-card"><h3 class="chart-title">Distance (km)</h3><canvas id="compareDistChart"></canvas></div>
+                            </div>
+                            <div class="mt-4 glass-card p-3" id="compare-table" style="overflow-x:auto;"></div>
+                            <div class="mt-3 p-3 glass-card bg-indigo-soft border-indigo" id="compare-recommendation"></div>
+                        </div>
+                    </div>
+                </section>
+                </div>
+
+                <!-- Contenu onglet Historique (nouveau) -->
+                <div id="tab-historique" class="tab-content" style="display:none;">
+                    <section class="dash-section">
+                        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+                            <h2 class="section-title" style="margin:0;">
+                                <i class="ph ph-clock-counter-clockwise"></i> Historique des Optimisations
+                            </h2>
+                            <button class="btn btn-outline btn-sm" id="btn-clear-historique">
+                                <i class="ph ph-trash"></i> Vider
+                            </button>
+                        </div>
+                        <div id="hist-empty" style="text-align:center; color:var(--text-muted); padding:40px 0; display:none;">
+                            <i class="ph ph-database" style="font-size:32px; display:block; margin-bottom:8px;"></i>
+                            Aucun historique. Lancez une optimisation pour commencer.
+                        </div>
+                        <div id="hist-chart-wrap" style="margin-bottom:20px; display:none;">
+                            <canvas id="histChart" height="80"></canvas>
+                        </div>
+                        <div id="hist-list"></div>
+                    </section>
+                </div>
+
+            </div>
+
+            <!-- ================= VIEW: SETTINGS ================= -->
+            <div id="view-params" class="view">
+    <div class="view-header" style="padding:20px 24px 0;">
+        <h2 style="font-size:16px;font-weight:500;margin-bottom:4px;">Paramètres</h2>
+        <p class="section-hint">Personnalisez les coefficients de tarification, RSE et algorithme.</p>
+    </div>
+    <div style="padding:16px 24px; overflow-y:auto; max-height:calc(100vh - 80px);">
+
+        <!-- Tarification -->
+        <div class="dash-section dash-card glass-card" style="padding: 24px; border-radius: 16px; margin-bottom: 24px;">
+            <h2 class="section-title">
+                <i class="ph ph-receipt"></i> Tarification taxi
+            </h2>
+            <div class="params-formula-box">
+                Tarif = <code>prise_en_charge</code> + (<code>distance_m ÷ 79</code>) × <code>prix_79m</code>
+                + (<code>duree_s × 0.08 ÷ 18</code>) × <code>prix_18s</code>
+            </div>
+
+            <div class="params-presets" id="tarif-presets">
+                <button class="params-preset active" data-preset="standard">Standard</button>
+                <button class="params-preset" data-preset="hp">Heure de pointe</button>
+                <button class="params-preset" data-preset="we">Weekend</button>
+                <button class="params-preset" data-preset="hpwe">HP + Weekend</button>
+            </div>
+
+            <div class="params-grid-2">
+                <div class="params-field">
+                    <label>Prise en charge (TND)</label>
+                    <input type="number" class="form-select" id="p-pc" value="0.900" step="0.050" min="0">
+                </div>
+                <div class="params-field">
+                    <label>Prix par 79m (milimes)</label>
+                    <input type="number" class="form-select" id="p-p79" value="0.046" step="0.001" min="0">
+                </div>
+                <div class="params-field">
+                    <label>Prix par 18s d'arrêt</label>
+                    <input type="number" class="form-select" id="p-p18" value="0.046" step="0.001" min="0">
+                </div>
+                <div class="params-field">
+                    <label>Coefficient heure de pointe</label>
+                    <input type="number" class="form-select" id="p-chp" value="1.20" step="0.05" min="1">
+                </div>
+                <div class="params-field">
+                    <label>Coefficient weekend</label>
+                    <input type="number" class="form-select" id="p-cwe" value="1.15" step="0.05" min="1">
+                </div>
+                <div class="params-field">
+                    <label>Mode actif</label>
+                    <select id="p-mode" class="form-select">
+                        <option value="standard">Standard</option>
+                        <option value="hp">Heure de pointe</option>
+                        <option value="we">Weekend</option>
+                        <option value="hpwe">HP + Weekend</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Simulateur -->
+            <div class="params-sim-box">
+                <div class="params-sim-title">
+                    <i class="ph ph-calculator"></i> Simulateur de tarif
+                </div>
+                <div class="params-grid-2">
+                    <div class="params-field">
+                        <label>Distance (km)</label>
+                        <input type="number" class="form-select" id="sim-dist" value="10" step="0.5" min="0.1" oninput="simulateTarif()">
+                    </div>
+                    <div class="params-field">
+                        <label>Durée (min)</label>
+                        <input type="number" class="form-select" id="sim-dur" value="15" step="1" min="1" oninput="simulateTarif()">
+                    </div>
+                </div>
+                <div class="params-sim-result">
+                    <span id="sim-result-total">0.000</span>
+                    <span class="unit">TND</span>
+                    <span id="sim-result-breakdown" class="breakdown"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- RSE -->
+        <div class="dash-section dash-card glass-card mt-3" style="padding: 24px; border-radius: 16px; margin-bottom: 24px;">
+            <h2 class="section-title"><i class="ph ph-leaf"></i> RSE & Environnement : Flotte Mixte</h2>
+            <p class="section-hint" style="margin-bottom:12px; font-size:12px; color:var(--text-muted);">
+                Indiquez le nombre de véhicules disponibles pour chaque catégorie. L'algorithme assignera automatiquement les plus écologiques aux trajets les plus longs (par défaut : Berline).
+            </p>
+            <div class="params-vehicle-grid" id="vehicle-grid">
+                <div class="params-vehicle" data-co2="0.21" data-id="suv" data-icon="🚗" data-label="SUV">
+                    <div style="display: flex; align-items: center; gap: 12px; width: 100%;">
+                        <span class="v-icon">🚗</span>
+                        <div style="flex:1; display:flex; flex-direction:column; text-align:left;">
+                            <span class="v-label">SUV</span>
+                            <span class="v-co2">0.21 kg/km</span>
+                        </div>
+                        <input type="number" class="v-input form-select" value="0" min="0" max="99" style="width:60px; text-align:center; padding:4px;">
+                    </div>
+                </div>
+                <div class="params-vehicle active" data-co2="0.12" data-id="berline" data-icon="🚕" data-label="Berline">
+                    <div style="display: flex; align-items: center; gap: 12px; width: 100%;">
+                        <span class="v-icon">🚕</span>
+                        <div style="flex:1; display:flex; flex-direction:column; text-align:left;">
+                            <span class="v-label">Berline</span>
+                            <span class="v-co2">0.12 kg/km</span>
+                        </div>
+                        <input type="number" class="v-input form-select" value="5" min="0" max="99" style="width:60px; text-align:center; padding:4px;">
+                    </div>
+                </div>
+                <div class="params-vehicle" data-co2="0.07" data-id="hybride" data-icon="🚙" data-label="Hybride">
+                    <div style="display: flex; align-items: center; gap: 12px; width: 100%;">
+                        <span class="v-icon">🚙</span>
+                        <div style="flex:1; display:flex; flex-direction:column; text-align:left;">
+                            <span class="v-label">Hybride</span>
+                            <span class="v-co2">0.07 kg/km</span>
+                        </div>
+                        <input type="number" class="v-input form-select" value="0" min="0" max="99" style="width:60px; text-align:center; padding:4px;">
+                    </div>
+                </div>
+                <div class="params-vehicle" data-co2="0.00" data-id="electrique" data-icon="⚡" data-label="Électrique">
+                    <div style="display: flex; align-items: center; gap: 12px; width: 100%;">
+                        <span class="v-icon">⚡</span>
+                        <div style="flex:1; display:flex; flex-direction:column; text-align:left;">
+                            <span class="v-label">Électrique</span>
+                            <span class="v-co2">0.00 kg/km</span>
+                        </div>
+                        <input type="number" class="v-input form-select" value="0" min="0" max="99" style="width:60px; text-align:center; padding:4px;">
+                    </div>
+                </div>
+            </div>
+            <div class="params-grid-2">
+                <div class="params-field" style="display:none;">
+                    <label>Coefficient CO₂ (kg/km)</label>
+                    <input type="number" class="form-select" id="p-co2" value="0.120" step="0.010" min="0" max="0.5">
+                </div>
+                <div class="params-field" style="grid-column: 1 / -1;">
+                    <label>Coût individuel de référence (TND/km)</label>
+                    <input type="number" class="form-select" id="p-ind" value="0.582" step="0.010" min="0.1">
+                </div>
+            </div>
+        </div>
+
+        <!-- Algorithme -->
+        <div class="dash-section dash-card glass-card mt-3" style="padding: 24px; border-radius: 16px; margin-bottom: 24px;">
+            <h2 class="section-title"><i class="ph ph-brain"></i> Paramètres algorithme</h2>
+            <div class="params-grid-3">
+                <div class="params-field">
+                    <label>Distance max cluster (km)</label>
+                    <input type="number" class="form-select" id="p-cdist" value="5.0" step="0.5" min="1">
+                </div>
+                <div class="params-field">
+                    <label>Time limit OR-Tools (s)</label>
+                    <input type="number" class="form-select" id="p-ortlimit" value="3" step="1" min="1" max="30">
+                </div>
+                <div class="params-field">
+                    <label>Facteur direction (λ)</label>
+                    <input type="number" class="form-select" id="p-lambda" value="2.0" step="0.1" min="0.5" max="10">
+                </div>
+            </div>
+        </div>
+
+        <!-- Actions -->
+        <div style="display:flex;gap:10px;margin-top:16px;">
+            <button class="btn btn-outline" id="btn-params-reset">
+                <i class="ph ph-arrow-counter-clockwise"></i> Réinitialiser
+            </button>
+            <button class="btn btn-primary" id="btn-params-apply" style="flex:1;">
+                <i class="ph ph-check"></i> Appliquer les paramètres
+            </button>
+        </div>
+        <div id="params-hint" class="section-hint mt-2" style="text-align:center;"></div>
+    </div>
+</div>
+        </main>
+
+        <div class="loading-overlay hidden" id="loading">
+            <div class="spinner"></div>
+            <div class="loading-text" id="loading-text">Chargement…</div>
+            <button id="btn-cancel-loading" class="btn btn-outline btn-sm hidden" style="margin-top:20px; border-color:rgba(255,255,255,0.3); color:white;">
+                <i class="ph ph-x"></i> Annuler
+            </button>
+        </div>
+        <div id="toast-container"></div>
+        <div class="toast-message hidden" id="pin-toast">
+            <span id="pin-name">Positionnement</span>
+            <button id="btn-cancel-pin" class="btn btn-sm btn-outline">Annuler</button>
+        </div>
+    </div>
+
+    <!-- Modals -->
+    <div class="modal-overlay hidden" id="modal-manual">
+        <div class="modal-content glass-card">
+            <div class="modal-header">
+                <h3 id="modal-title">Ajouter</h3>
+                <button class="modal-close" id="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="text" class="form-select mb-3" id="modal-name" placeholder="Nom">
+                <div id="modal-cap-group" class="hidden"><input type="number" class="form-select" id="modal-capacite"></div>
+                <button class="btn btn-primary w-100" id="modal-save">Enregistrer</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay hidden" id="modal-route-details">
+        <div class="modal-content glass-card" style="max-width:600px;">
+            <div class="modal-header">
+                <h3 id="route-modal-title">Détails</h3>
+                <button class="modal-close" id="route-modal-close">&times;</button>
+            </div>
+            <div class="modal-body" id="route-modal-body" style="max-height:60vh; overflow-y:auto;"></div>
+            <div class="modal-footer">
+                <button class="btn btn-primary btn-sm" id="route-modal-pdf-btn" style="margin-right: 8px;">Générer PDF</button>
+                <button class="btn btn-outline btn-sm" id="route-modal-close-btn">Fermer</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
+    <script src="/static/js/map.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

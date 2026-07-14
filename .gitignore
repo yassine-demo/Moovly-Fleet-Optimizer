@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+
+# Environnement
+venv/
+env/
+
+# Fichiers temporaires et uploads
+historique.json
+uploads/*.xlsx
+
+# OS
+.DS_Store
+Thumbs.db

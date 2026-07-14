@@ -1,0 +1,5 @@
+distance_km;duree_min;nb_vehicules;nb_employes;cout_total;co2_kg;co2_evite_kg;cout_evite_tnd;taux_remplissage;score_composite;temps_calcul_s;flotte;label
+36.81;38.7;2;7;23.711;4.42;5.28;31.11;87.5;0.0;300.21;[4, 4, 4, 4, 4, 4, 4];Capacité fixe 4 places
+39.8;43.8;3;7;26.412;4.78;4.92;28.4;77.8;0.0;300.1;[3, 3, 3, 3, 3, 3, 3];Capacité fixe 3 places
+45.13;46.2;4;7;30.445;5.42;4.28;24.37;87.5;0.0;300.1;[2, 2, 2, 2, 2, 2, 2];Capacité fixe 2 places
+36.81;38.7;2;7;23.711;4.42;5.28;31.11;87.5;0.0;300.1;[4, 4, 3, 2, 2];Flotte adaptative (heuristique) : [4, 4, 3, 2, 2]
