@@ -1,4 +1,4 @@
-﻿/**
+/**
  * MoovlyMap — Map module for Test 2
  */
 const MoovlyMap = (function () {

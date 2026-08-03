@@ -1,9 +1,10 @@
 """
-🚀 MOOVLY FLEET OPTIMIZER — TEST 2 (Sans Taxis)
+MOOVLY FLEET OPTIMIZER
 Flask Backend
 """
 
 from flask import Flask, render_template, request, jsonify, send_file, send_from_directory
+from flask_sqlalchemy import SQLAlchemy
 import os
 import json
 import uuid
@@ -13,14 +14,119 @@ from moovly_system import (
     geocoder_lieu, generer_suggestions, calculer_tarif
 )
 
-import threading
-
 app = Flask(__name__)
 
-store = {'employes': [], 'destinations': []}
-store_lock = threading.Lock()
+
+# DATABASE CONFIG
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///moovly_fleet.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
 
 
+# MODELS
+class Employee(db.Model):
+    __tablename__ = 'employees'
+    id        = db.Column(db.Integer, primary_key=True)
+    emp_id    = db.Column(db.String(50))
+    _id       = db.Column(db.String(50), unique=True, nullable=False, index=True)
+    nom       = db.Column(db.String(200))
+    residence = db.Column(db.String(500))
+    lat       = db.Column(db.Float, nullable=True)
+    lng       = db.Column(db.Float, nullable=True)
+
+    def to_dict(self):
+        return {
+            'id': self.emp_id,
+            'nom': self.nom,
+            'residence': self.residence,
+            'lat': self.lat,
+            'lng': self.lng,
+            '_id': self._id
+        }
+
+    @classmethod
+    def from_dict(cls, d):
+        return cls(
+            emp_id    = d.get('id'),
+            _id       = d.get('_id'),
+            nom       = d.get('nom'),
+            residence = d.get('residence'),
+            lat       = d.get('lat'),
+            lng       = d.get('lng')
+        )
+
+
+class Destination(db.Model):
+    __tablename__ = 'destinations'
+    id      = db.Column(db.Integer, primary_key=True)
+    dest_id = db.Column(db.String(50))
+    _id     = db.Column(db.String(50), unique=True, nullable=False, index=True)
+    nom     = db.Column(db.String(200))
+    lat     = db.Column(db.Float, nullable=True)
+    lng     = db.Column(db.Float, nullable=True)
+
+    def to_dict(self):
+        return {
+            'id': self.dest_id,
+            'nom': self.nom,
+            'lat': self.lat,
+            'lng': self.lng,
+            '_id': self._id
+        }
+
+    @classmethod
+    def from_dict(cls, d):
+        return cls(
+            dest_id = d.get('id'),
+            _id     = d.get('_id'),
+            nom     = d.get('nom'),
+            lat     = d.get('lat'),
+            lng     = d.get('lng')
+        )
+
+
+class OptimizationHistory(db.Model):
+    __tablename__ = 'optimization_history'
+    id              = db.Column(db.Integer, primary_key=True)
+    snapshot_id     = db.Column(db.String(50), default=lambda: str(uuid.uuid4())[:8])
+    date            = db.Column(db.DateTime, default=datetime.now)
+    nb_employes     = db.Column(db.Integer, default=0)
+    nb_vehicules    = db.Column(db.Integer, default=0)
+    capacite        = db.Column(db.String(20), default='')
+    distance_km     = db.Column(db.Float, default=0)
+    duree_min       = db.Column(db.Float, default=0)
+    tarif_tnd       = db.Column(db.Float, default=0)
+    co2_kg          = db.Column(db.Float, default=0)
+    co2_saved_kg    = db.Column(db.Float, default=0)
+    cost_saved_tnd  = db.Column(db.Float, default=0)
+    methode         = db.Column(db.String(100), default='')
+    destination_nom = db.Column(db.String(200), default='')
+
+    def to_dict(self):
+        return {
+            "id": self.snapshot_id,
+            "date": self.date.isoformat() if self.date else None,
+            "nb_employes": self.nb_employes,
+            "nb_vehicules": self.nb_vehicules,
+            "capacite": self.capacite,
+            "distance_km": self.distance_km,
+            "duree_min": self.duree_min,
+            "tarif_tnd": self.tarif_tnd,
+            "co2_kg": self.co2_kg,
+            "co2_saved_kg": self.co2_saved_kg,
+            "cost_saved_tnd": self.cost_saved_tnd,
+            "methode": self.methode,
+            "destination_nom": self.destination_nom
+        }
+
+
+# Auto-create tables on startup
+with app.app_context():
+    db.create_all()
+
+
+
+# HELPERS
 def _normaliser_capacite(capacite):
     if capacite is None:
         return 3
@@ -36,7 +142,9 @@ def _normaliser_capacite(capacite):
         return [int(c) for c in capacite]
     return int(capacite)
 
-# ── Pages ──
+
+
+# PAGES
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -46,7 +154,9 @@ def favicon():
     return send_from_directory(os.path.join(app.root_path, 'static'),
                                'favicon.ico', mimetype='image/vnd.microsoft.icon')
 
-# ── Upload employés ──
+
+
+# UPLOAD EMPLOYÉS
 @app.route('/api/upload_employes', methods=['POST'])
 def upload_employes():
     file = request.files.get('file')
@@ -59,9 +169,10 @@ def upload_employes():
         employes = charger_employes_excel(filepath)
     except ValueError as ve:
         return jsonify({'status': 'error', 'message': str(ve)}), 400
-        
+
     if not employes:
         return jsonify({'status': 'error', 'message': 'Aucun employé trouvé'}), 400
+
     geocode_failures = []
     for emp in employes:
         if emp['lat'] is None and emp.get('residence'):
@@ -71,11 +182,19 @@ def upload_employes():
             else:
                 geocode_failures.append(emp['residence'])
         elif emp['lat'] is None:
-                            geocode_failures.append(emp.get('nom', 'Inconnu'))
-    
-    with store_lock:
-        store['employes'] = employes
-        
+            geocode_failures.append(emp.get('nom', 'Inconnu'))
+
+    # Persist to SQLite
+    try:
+        Employee.query.delete()
+        db.session.commit()
+        for emp in employes:
+            db.session.add(Employee.from_dict(emp))
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
     return jsonify({
         'status': 'success',
         'employes': employes,
@@ -83,15 +202,18 @@ def upload_employes():
         'geocode_failures': geocode_failures
     })
 
-# ── Destinations ──
+
+
+# DESTINATIONS
 @app.route('/api/load_destinations')
 def load_destinations():
-    # Pas de destination par défaut. user va pinner la destination sur la carte
-    with store_lock:
-        store['destinations'] = []
-        
+    Destination.query.delete()
+    db.session.commit()
     return jsonify({'status': 'success', 'destinations': [], 'count': 0})
-# Add manual point 
+
+
+
+# ADD MANUAL POINT
 @app.route('/api/add_manual', methods=['POST'])
 def add_manual():
     data = request.json
@@ -99,81 +221,151 @@ def add_manual():
     if data_type not in ['employes', 'destinations'] or not item:
         return jsonify({'status': 'error', 'message': 'Type ou item invalide'}), 400
     item['_id'] = f"manual_{os.urandom(4).hex()}"
-    
-    with store_lock:
+
+    try:
         if data_type == 'destinations':
-            # L'utilisateur ne peut poser qu'un seul pin (une seule destination de taxis)
-            store['destinations'] = [item]
+            Destination.query.delete()
+            db.session.commit()
+            db.session.add(Destination.from_dict(item))
         else:
-            # Si c'est un employé manuel, on l'ajoute à la liste
-            store['employes'].append(item)
-            
+            db.session.add(Employee.from_dict(item))
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
     return jsonify({'status': 'success', '_id': item['_id']})
 
 
-# ── Clear Store (Réinitialisation) ──
+
+# CLEAR STORE (RÉINITIALISATION)
 @app.route('/api/clear_store', methods=['POST'])
 def clear_store():
-    with store_lock:
-        store['employes'] = []
-        store['destinations'] = []
+    try:
+        Employee.query.delete()
+        Destination.query.delete()
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
     return jsonify({'status': 'success', 'message': 'Store vidé'})
 
-# ── Update location ──
+
+
+# UPDATE LOCATION
 @app.route('/api/update_location', methods=['POST'])
 def update_location():
     data = request.json
     data_type, item_id = data.get('type'), data.get('id')
     lat, lng = data.get('lat'), data.get('lng')
-    if data_type not in store or not item_id or lat is None or lng is None:
+    if data_type not in ['employes', 'destinations'] or not item_id or lat is None or lng is None:
         return jsonify({'status': 'error', 'message': 'Données invalides'}), 400
-        
-    with store_lock:
-        for item in store[data_type]:
-            if item.get('_id') == item_id:
-                item['lat'], item['lng'] = float(lat), float(lng)
-                return jsonify({'status': 'success', 'item': item})
-                
-    return jsonify({'status': 'error', 'message': 'Entité non trouvée'}), 404
 
-# ── Route geometry ──
+    if data_type == 'employes':
+        entity = Employee.query.filter_by(_id=item_id).first()
+    else:
+        entity = Destination.query.filter_by(_id=item_id).first()
+
+    if not entity:
+        return jsonify({'status': 'error', 'message': 'Entité non trouvée'}), 404
+
+    try:
+        entity.lat = float(lat)
+        entity.lng = float(lng)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+    return jsonify({'status': 'success', 'item': entity.to_dict()})
+
+
+
+# ROUTE GEOMETRY
 @app.route('/api/route_geometry', methods=['POST'])
 def route_geometry():
     data = request.json
     waypoints = data.get('waypoints', [])
+    use_alternative = data.get('use_alternative', False)
+
     if len(waypoints) < 2:
         return jsonify({'status': 'error', 'message': 'Min 2 waypoints'}), 400
+
     try:
         import requests as req
-        coords_str = ';'.join([f"{wp[1]},{wp[0]}" for wp in waypoints])
-        url = f"http://router.project-osrm.org/route/v1/driving/{coords_str}"
-        resp = req.get(url, params={'overview': 'false', 'steps': 'true', 'geometries': 'geojson'}, timeout=10)
-        if resp.status_code == 200:
-            rdata = resp.json()
-            if rdata['code'] == 'Ok':
-                route = rdata['routes'][0]
-                latlngs = []
-                for idx, leg in enumerate(route['legs']):
-                    latlngs.append(waypoints[idx])
-                    for step in leg['steps']:
-                        for c in step['geometry']['coordinates']:
-                            latlngs.append([c[1], c[0]])
-                    latlngs.append(waypoints[idx + 1])
-                return jsonify({'status': 'success', 'latlngs': latlngs,
-                                'distance_km': route['distance'] / 1000,
-                                'duration_min': route['duration'] / 60})
-        return jsonify({'status': 'fallback', 'latlngs': waypoints})
-    except Exception:
+        import math
+
+        def fetch_osrm(wps, alternatives=False):
+            coords_str = ';'.join([f"{wp[1]},{wp[0]}" for wp in wps])
+            url = f"http://router.project-osrm.org/route/v1/driving/{coords_str}"
+            params = {'overview': 'false', 'steps': 'true', 'geometries': 'geojson'}
+            if alternatives:
+                params['alternatives'] = 'true'
+            resp = req.get(url, params=params, timeout=10)
+            if resp.status_code == 200:
+                rdata = resp.json()
+                if rdata['code'] == 'Ok':
+                    return rdata['routes']
+            return None
+
+        routes = fetch_osrm(waypoints, alternatives=use_alternative)
+
+        if not routes:
+            return jsonify({'status': 'fallback', 'latlngs': waypoints})
+
+        route = None
+        if use_alternative:
+            if len(routes) > 1:
+                route = routes[1]
+            else:
+                lat1, lng1 = waypoints[0]
+                lat2, lng2 = waypoints[1]
+                mid_lat = (lat1 + lat2) / 2.0
+                mid_lng = (lng1 + lng2) / 2.0
+                dx = lng2 - lng1
+                dy = lat2 - lat1
+                length = math.hypot(dx, dy)
+                if length > 0.001:
+                    nx = -dy / length
+                    ny = dx / length
+                    offset_lat = mid_lat + ny * 0.015
+                    offset_lng = mid_lng + nx * 0.015
+                    alt_waypoints = [waypoints[0], [offset_lat, offset_lng]] + waypoints[1:]
+                    alt_routes = fetch_osrm(alt_waypoints, alternatives=False)
+                    if alt_routes:
+                        route = alt_routes[0]
+
+                if not route:
+                    return jsonify({'status': 'no_alternative', 'latlngs': waypoints})
+        else:
+            route = routes[0]
+
+        latlngs = []
+        for idx, leg in enumerate(route['legs']):
+            for step in leg['steps']:
+                for c in step['geometry']['coordinates']:
+                    latlngs.append([c[1], c[0]])
+
+        return jsonify({
+            'status': 'success',
+            'latlngs': latlngs,
+            'distance_km': route['distance'] / 1000,
+            'duration_min': route['duration'] / 60
+        })
+    except Exception as e:
+        print("Erreur OSRM:", e)
         return jsonify({'status': 'fallback', 'latlngs': waypoints})
 
-# ── Optimize ──
+
+
+# OPTIMIZE
 @app.route('/api/optimize', methods=['POST'])
 def optimize():
     data = request.json or {}
     selected_emp_ids = data.get('selected_employes_ids', [])
     dest_id = data.get('destination_id')
     capacite = _normaliser_capacite(data.get('capacite', 3))
-    
+
     poids_raw = data.get('poids', {})
     poids = {
         'distance': float(poids_raw.get('distance', 0.33)),
@@ -182,33 +374,40 @@ def optimize():
     }
     total = sum(poids.values()) or 1.0
     poids = {k: v / total for k, v in poids.items()}
-    
+
     try:
-        with store_lock:
-         employes = [e for e in store['employes'] if e.get('_id') in selected_emp_ids and e['lat'] is not None]
-         destination = next((d for d in store['destinations'] if d.get('_id') == dest_id), None)
-    
+        employes = [
+            e.to_dict() for e in
+            Employee.query.filter(
+                Employee._id.in_(selected_emp_ids),
+                Employee.lat != None
+            ).all()
+        ]
+        dest_entity = Destination.query.filter_by(_id=dest_id).first()
+        destination = dest_entity.to_dict() if dest_entity else None
+
         if not employes or not destination:
             return jsonify({'status': 'error', 'message': 'Données insuffisantes'}), 400
+
         result = generer_suggestions(employes, destination, capacite, poids=poids)
         return jsonify({'status': 'success', 'suggestions': result, 'count': len(result)})
     except Exception as e:
         import traceback; traceback.print_exc()
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-# ── Optimize Stream (SSE) ──
+
+# OPTIMIZE STREAM (SSE)
 @app.route('/api/optimize_stream', methods=['POST'])
 def optimize_stream():
-    import json
     import queue
     import threading
     from flask import Response
-    
+
     data = request.json or {}
     selected_emp_ids = data.get('selected_employes_ids', [])
     dest_id = data.get('destination_id')
     capacite = _normaliser_capacite(data.get('capacite', 3))
-    
+
     poids_raw = data.get('poids', {})
     poids = {
         'distance': float(poids_raw.get('distance', 0.33)),
@@ -217,20 +416,27 @@ def optimize_stream():
     }
     total = sum(poids.values()) or 1.0
     poids = {k: v / total for k, v in poids.items()}
-    
-    employes = [e for e in store['employes'] if e.get('_id') in selected_emp_ids and e['lat'] is not None]
-    destination = next((d for d in store['destinations'] if d.get('_id') == dest_id), None)
-    
+
+    employes = [
+        e.to_dict() for e in
+        Employee.query.filter(
+            Employee._id.in_(selected_emp_ids),
+            Employee.lat != None
+        ).all()
+    ]
+    dest_entity = Destination.query.filter_by(_id=dest_id).first()
+    destination = dest_entity.to_dict() if dest_entity else None
+
     if not employes or not destination:
         def error_gen():
             yield f"data: {json.dumps({'step': 'error', 'message': 'Données insuffisantes'})}\n\n"
         return Response(error_gen(), mimetype='text/event-stream')
 
     q = queue.SimpleQueue()
-    
+
     def progress_callback(step, pct, msg):
         q.put({"step": step, "pct": pct, "msg": msg})
-        
+
     def worker():
         try:
             result = generer_suggestions(employes, destination, capacite, poids=poids, progress_callback=progress_callback)
@@ -251,17 +457,18 @@ def optimize_stream():
             yield f"data: {json.dumps(msg)}\n\n"
             if msg.get("step") in ["done", "error"]:
                 break
-                
+
     return Response(generate(), mimetype='text/event-stream')
 
-# ── Optimize manual ──
+
+# OPTIMIZE MANUAL
 @app.route('/api/optimize_manual', methods=['POST'])
 def optimize_manual():
     data = request.json or {}
     manual_cluster_ids = data.get('manual_cluster_ids', [])
     dest_id = data.get('destination_id')
     capacite = _normaliser_capacite(data.get('capacite', 3))
-    
+
     poids_raw = data.get('poids', {})
     poids = {
         'distance': float(poids_raw.get('distance', 0.33)),
@@ -270,26 +477,26 @@ def optimize_manual():
     }
     total = sum(poids.values()) or 1.0
     poids = {k: v / total for k, v in poids.items()}
-    
+
     try:
         from moovly_system import generer_suggestions_manual
-        
-        with store_lock:
-            employes = [e for e in store['employes'] if e['lat'] is not None]
-            destination = next((d for d in store['destinations'] if d.get('_id') == dest_id), None)
-            
+
+        employes = [e.to_dict() for e in Employee.query.filter(Employee.lat != None).all()]
+        dest_entity = Destination.query.filter_by(_id=dest_id).first()
+        destination = dest_entity.to_dict() if dest_entity else None
+
         if not manual_cluster_ids or not destination:
             return jsonify({'status': 'error', 'message': 'Données insuffisantes'}), 400
+
         result = generer_suggestions_manual(manual_cluster_ids, destination, employes, capacite, poids=poids)
         return jsonify({'status': 'success', 'suggestions': result, 'count': len(result)})
     except Exception as e:
         import traceback; traceback.print_exc()
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-# ══════════════════════════════════════════════════════════════════
+
+
 # COMPARATEUR DE SCÉNARIOS
-# Compare plusieurs capacités de véhicule sur les mêmes données.
-# ══════════════════════════════════════════════════════════════════
 @app.route('/api/compare_scenarios', methods=['POST'])
 def compare_scenarios():
     try:
@@ -297,8 +504,6 @@ def compare_scenarios():
         selected_emp_ids = data.get('selected_employes_ids', [])
         dest_id          = data.get('destination_id')
         capacites        = data.get('capacites', [2, 3, 4])
-        
-        # Récupération de la capacité actuellement sélectionnée dans l'interface
         current_capacity = _normaliser_capacite(data.get('current_capacity', 3))
 
         poids_raw = data.get('poids', {})
@@ -310,30 +515,31 @@ def compare_scenarios():
         total = sum(poids.values()) or 1.0
         poids = {k: v / total for k, v in poids.items()}
 
-        # Chercher les employés dans le store
-        with store_lock:
-            employes = [e for e in store['employes']
-                        if e.get('_id') in selected_emp_ids and e['lat'] is not None]
+        employes = [
+            e.to_dict() for e in
+            Employee.query.filter(
+                Employee._id.in_(selected_emp_ids),
+                Employee.lat != None
+            ).all()
+        ]
 
-            # Fallback : si le store est vide (serveur redémarré), utiliser les données envoyées
-            if not employes:
-                employes_raw = data.get('employes_data', [])
-                employes = [e for e in employes_raw if e.get('lat') is not None]
+        if not employes:
+            employes_raw = data.get('employes_data', [])
+            employes = [e for e in employes_raw if e.get('lat') is not None]
 
-            destination = next((d for d in store['destinations'] if d.get('_id') == dest_id), None)
+        dest_entity = Destination.query.filter_by(_id=dest_id).first()
+        destination = dest_entity.to_dict() if dest_entity else None
 
-        # Fallback destination
         if not destination:
             destination = data.get('destination_data')
 
         if not employes:
-            return jsonify({'status': 'error', 'message': f'Aucun employé trouvé (store: {len(store["employes"])}, ids reçus: {len(selected_emp_ids)})'}), 400
+            return jsonify({'status': 'error', 'message': 'Aucun employé trouvé'}), 400
         if not destination:
             return jsonify({'status': 'error', 'message': 'Destination introuvable'}), 400
 
         from concurrent.futures import ThreadPoolExecutor
 
-        # Fonction interne pour traiter une capacité et retourner le scénario
         def process_capacity(cap):
             cap = int(cap)
             suggestions = generer_suggestions(employes, destination, cap, poids=poids)
@@ -353,19 +559,15 @@ def compare_scenarios():
                 'fill_rate_percent': rse.get('fill_rate_percent', 0),
             }
 
-        # Exécuter les scénarios en parallèle pour gagner du temps
         scenarios = []
         with ThreadPoolExecutor(max_workers=len(capacites)) as executor:
             results = list(executor.map(process_capacity, capacites))
-            
-        # Filtrer les résultats invalides (None)
+
         scenarios = [s for s in results if s is not None]
 
-        # Identification du coût du scénario de référence (choix de l'utilisateur)
         baseline_scenario = next((s for s in scenarios if s['capacite'] == current_capacity), None)
-        
+
         if not baseline_scenario:
-            # Si la capacité active n'est pas comprise dans la boucle standard [2, 3, 4], calcul à la volée
             baseline_suggestions = generer_suggestions(employes, destination, current_capacity, poids=poids)
             if baseline_suggestions:
                 b_best = next((s for s in baseline_suggestions if s.get('is_best')), baseline_suggestions[0])
@@ -375,7 +577,6 @@ def compare_scenarios():
         else:
             baseline_cost = baseline_scenario['tarif_tnd']
 
-        # Recalcul de l'économie financière réelle par rapport au choix de l'utilisateur
         for sc in scenarios:
             if baseline_cost is not None:
                 sc['cost_saved_tnd'] = baseline_cost - sc['tarif_tnd']
@@ -390,21 +591,18 @@ def compare_scenarios():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# ══════════════════════════════════════════════════════════════════
-# EXPORT EXCEL — VERSION COMPLÈTE AVEC MISE EN FORME
-# ══════════════════════════════════════════════════════════════════
+
+# EXPORT EXCEL
 @app.route('/api/export_excel', methods=['POST'])
 def export_excel():
     import pandas as pd
     from io import BytesIO
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
-    from datetime import datetime
 
     data   = request.json or {}
     result = data.get('result', {})
 
-    # ── Palette ──
     C = {
         'dark':    "FF0F172A", 'dark2':  "FF1E293B", 'slate':  "FF334155",
         'indigo':  "FF6366F1", 'green':  "FF10B981", 'green_d':"FF065F46",
@@ -454,19 +652,13 @@ def export_excel():
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             wb = writer.book
 
-            # ════════════════════════════════════
-            # FEUILLE 1 — SYNTHÈSE
-            # ════════════════════════════════════
             ws1 = wb.create_sheet("📊 Synthèse")
-
             ws1.merge_cells("A1:F1")
             set_cell(ws1,1,1,"MOOVLY — Rapport d'Optimisation de Flotte",
                      fw(15), fill(C['dark']), ac(), h=42)
-
             ws1.merge_cells("A2:F2")
             set_cell(ws1,2,1,f"Généré le {now_str}  •  Algorithme : {methode}  •  Destination : {destination.get('nom','—')}",
                      fn(9, C['muted']), fill(C['dark2']), ac(), h=20)
-
             ws1.row_dimensions[3].height = 6
 
             kpi_hdrs = ["Indicateur", "Valeur", "Unité", "× 5 jours", "× 20 jours", "Remarque"]
@@ -491,7 +683,7 @@ def export_excel():
                     fnt = fd(11) if ci==1 else fn(11)
                     aln = al() if ci==1 else ac()
                     set_cell(ws1,ri,ci,val, fnt, fill(bg), aln, brd(), h=22)
-            # Row économie en vert
+
             for ci in range(1,7):
                 c = ws1.cell(row=12, column=ci)
                 c.fill = fill(C['green_l'])
@@ -499,13 +691,9 @@ def export_excel():
 
             auto_w(ws1); ws1.freeze_panes = "A5"
 
-            # ════════════════════════════════════
-            # FEUILLE 2 — VÉHICULES & PASSAGERS
-            # ════════════════════════════════════
             ws2 = wb.create_sheet("🚗 Véhicules & Passagers")
             ws2.merge_cells("A1:G1")
             set_cell(ws2,1,1,"Détail des véhicules — Ordre de ramassage",fw(13),fill(C['dark']),ac(),h=32)
-
             h2 = ["Véhicule","# Arrêt","Passager","Résidence","Dist. cumulée (km)","Durée cumulée (min)","Tarif (TND)"]
             for ci,h in enumerate(h2,1):
                 set_cell(ws2,2,ci,h, fw(10), fill(C['slate']), ac(), brd(), h=26)
@@ -528,7 +716,6 @@ def export_excel():
                                  Font(bold=(ci==1),size=10,name="Calibri",color=C['dark2']),
                                  fill(vf), ac() if ci!=4 else al(), brd(), h=20)
                     cur += 1
-                # Ligne destination
                 dest_row = [route.get('vehicule_id',''),"🏁",destination.get('nom',''),"— DESTINATION —",
                             round(route.get('distance_km',0),2),round(route.get('duree_min',0),1),
                             round(route['tarif']['final'],2)]
@@ -537,9 +724,6 @@ def export_excel():
                 cur += 2
             auto_w(ws2); ws2.freeze_panes = "A3"
 
-            # ════════════════════════════════════
-            # FEUILLE 3 — SEGMENTS
-            # ════════════════════════════════════
             ws3 = wb.create_sheet("🗺️ Segments")
             ws3.merge_cells("A1:F1")
             set_cell(ws3,1,1,"Segments de trajet détaillés par véhicule",fw(13),fill(C['dark']),ac(),h=32)
@@ -563,9 +747,6 @@ def export_excel():
                 sr+=2
             auto_w(ws3); ws3.freeze_panes = "A3"
 
-            # ════════════════════════════════════
-            # FEUILLE 4 — RSE
-            # ════════════════════════════════════
             ws4 = wb.create_sheet("🌿 Impact RSE")
             ws4.merge_cells("A1:D1")
             set_cell(ws4,1,1,"Impact Environnemental & Économique",
@@ -581,11 +762,11 @@ def export_excel():
                 set_cell(ws4,4,ci,h, fw(11), fill(hdr_clrs[ci-1]), ac(), brd(), h=28)
 
             rse_rows = [
-                ["🌍 CO₂ émis (kg)",           rse.get('co2_scenario_perso',0), rse.get('co2_scenario_moovly',0), rse.get('co2_saved_kg',0)],
-                ["💰 Coût transport (TND)",     rse.get('cost_scenario_perso',0), round(rse.get('cost_scenario_perso',0)-rse.get('cost_saved_tnd',0),2), rse.get('cost_saved_tnd',0)],
-                ["📏 Distance totale (km)",     round(dist_jour+rse.get('distance_saved_km',0),2), dist_jour, rse.get('distance_saved_km',0)],
-                ["📦 Taux remplissage (%)",     "1 pers/véhicule", rse.get('fill_rate_percent',0), "—"],
-                ["🚗 Nb. véhicules",            nb_emp, nb_veh, nb_emp - nb_veh],
+                ["CO₂ émis (kg)",           rse.get('co2_scenario_perso',0), rse.get('co2_scenario_moovly',0), rse.get('co2_saved_kg',0)],
+                ["Coût transport (TND)",     rse.get('cost_scenario_perso',0), round(rse.get('cost_scenario_perso',0)-rse.get('cost_saved_tnd',0),2), rse.get('cost_saved_tnd',0)],
+                ["Distance totale (km)",     round(dist_jour+rse.get('distance_saved_km',0),2), dist_jour, rse.get('distance_saved_km',0)],
+                ["Taux remplissage (%)",     "1 pers/véhicule", rse.get('fill_rate_percent',0), "—"],
+                ["Nb. véhicules",            nb_emp, nb_veh, nb_emp - nb_veh],
             ]
             for ri, row in enumerate(rse_rows, 5):
                 bg = C['light'] if ri%2==0 else C['white']
@@ -599,12 +780,7 @@ def export_excel():
             ws4.merge_cells("A11:D11")
             set_cell(ws4,11,1,"Projection annuelle (252 jours ouvrés)",fw(11),fill(C['indigo']),ac(),h=28)
 
-            annual = [
-                ["🌍 CO₂ économisé / an (kg)",       round(rse.get('co2_saved_kg',0)*252,1)],
-                ["💰 Économie financière / an (TND)", round(rse.get('cost_saved_tnd',0)*252,1)],
-                ["📏 Distance économisée / an (km)",  round(rse.get('distance_saved_km',0)*252,1)],
-                ["🌳 Équivalent arbres plantés",       round(rse.get('co2_saved_kg',0)*252/21,1)],
-            ]
+ 
             for ri,(label,val) in enumerate(annual, 12):
                 set_cell(ws4,ri,1,label, fd(11), fill(C['light']), al(), brd(), h=24)
                 set_cell(ws4,ri,2,val, Font(bold=True,size=12,color=C['green_d'],name="Calibri"),
@@ -612,7 +788,6 @@ def export_excel():
 
             auto_w(ws4)
 
-            # Supprimer feuille vide par défaut
             if "Sheet" in wb.sheetnames:
                 del wb["Sheet"]
 
@@ -626,67 +801,51 @@ def export_excel():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# =============================================================================
-# HISTORIQUE
-# =============================================================================
+# SQLITE
 
 @app.route('/api/save_historique', methods=['POST'])
 def save_historique():
     try:
         data = request.json
         if data.get('_clear'):
-            with open('historique.json', 'w', encoding='utf-8') as f:
-                json.dump([], f)
+            OptimizationHistory.query.delete()
+            db.session.commit()
             return jsonify({'status': 'success'})
 
-        filepath = 'historique.json'
-        hist = []
-        if os.path.exists(filepath):
-            with open(filepath, 'r', encoding='utf-8') as f:
-                try:
-                    hist = json.load(f)
-                except json.JSONDecodeError:
-                    hist = []
-        
-        snapshot = {
-            "id": str(uuid.uuid4())[:8],
-            "date": datetime.now().isoformat(),
-            "nb_employes": data.get("nb_employes", 0),
-            "nb_vehicules": data.get("nb_vehicules", 0),
-            "capacite": data.get("capacite", 0),
-            "distance_km": data.get("distance_km", 0),
-            "duree_min": data.get("duree_min", 0),
-            "tarif_tnd": data.get("tarif_tnd", 0),
-            "co2_kg": data.get("co2_kg", 0),
-            "co2_saved_kg": data.get("co2_saved_kg", 0),
-            "cost_saved_tnd": data.get("cost_saved_tnd", 0),
-            "methode": data.get("methode", ""),
-            "destination_nom": data.get("destination_nom", "")
-        }
-        
-        hist.append(snapshot)
-        hist = hist[-50:] # Garder les 50 derniers
-        
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(hist, f, indent=2, ensure_ascii=False)
-            
-        return jsonify({'status': 'success', 'id': snapshot['id']})
+        snap = OptimizationHistory(
+            nb_employes     = data.get("nb_employes", 0),
+            nb_vehicules    = data.get("nb_vehicules", 0),
+            capacite        = str(data.get("capacite", "")),
+            distance_km     = data.get("distance_km", 0),
+            duree_min       = data.get("duree_min", 0),
+            tarif_tnd       = data.get("tarif_tnd", 0),
+            co2_kg          = data.get("co2_kg", 0),
+            co2_saved_kg    = data.get("co2_saved_kg", 0),
+            cost_saved_tnd  = data.get("cost_saved_tnd", 0),
+            methode         = data.get("methode", ""),
+            destination_nom = data.get("destination_nom", "")
+        )
+        db.session.add(snap)
+        db.session.commit()
+        return jsonify({'status': 'success', 'id': snap.snapshot_id})
     except Exception as e:
+        db.session.rollback()
         print(f"Error saving historique: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
 
 @app.route('/api/get_historique', methods=['GET'])
 def get_historique():
     try:
-        filepath = 'historique.json'
-        if not os.path.exists(filepath):
-            return jsonify({'status': 'success', 'historique': [], 'count': 0})
-        with open(filepath, 'r', encoding='utf-8') as f:
-            hist = json.load(f)
+        rows = OptimizationHistory.query.order_by(OptimizationHistory.date.asc()).all()
+        hist = [r.to_dict() for r in rows]
         return jsonify({'status': 'success', 'historique': hist, 'count': len(hist)})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
+
+
+# PARAMÈTRES
 import moovly_system as ms
 
 @app.route('/api/get_params', methods=['GET'])
@@ -703,7 +862,6 @@ def update_params():
     try:
         data = request.get_json()
 
-        # Tarification
         if 'tarifs' in data:
             t = data['tarifs']
             ms.TARIFS['prise_en_charge'] = float(t.get('prise_en_charge', ms.TARIFS['prise_en_charge']))
@@ -713,7 +871,6 @@ def update_params():
             ms.TARIFS['coef_weekend']    = float(t.get('coef_weekend',    ms.TARIFS['coef_weekend']))
             ms.TARIFS['mode_actif']      = str(t.get('mode_actif',        ms.TARIFS['mode_actif']))
 
-        # RSE
         if 'params_rse' in data:
             r = data['params_rse']
             ms.PARAMS_RSE['co2_kg_per_km']          = float(r.get('co2_kg_per_km',          ms.PARAMS_RSE['co2_kg_per_km']))
@@ -721,7 +878,6 @@ def update_params():
             if 'fleet_composition' in r:
                 ms.PARAMS_RSE['fleet_composition'] = r['fleet_composition']
 
-        # Algorithme
         if 'params_algo' in data:
             a = data['params_algo']
             ms.PARAMS_ALGO['max_cluster_distance_km'] = float(a.get('max_cluster_distance_km', ms.PARAMS_ALGO['max_cluster_distance_km']))
@@ -733,9 +889,11 @@ def update_params():
         import traceback
         return jsonify({'status': 'error', 'message': str(e), 'trace': traceback.format_exc()}), 500
 
+
+# MAIN
 if __name__ == '__main__':
     print("\n" + "="*60)
-    print("🚀 MOOVLY FLEET OPTIMIZER — TEST 2")
+    print("🚀 MOOVLY FLEET OPTIMIZER — SQLite Edition")
     print("📍 http://127.0.0.1:5001")
     print("="*60 + "\n")
     app.run(debug=True, use_reloader=False, port=5001)

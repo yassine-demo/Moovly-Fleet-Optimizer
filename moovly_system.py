@@ -420,99 +420,116 @@ def ordonner_ortools(cluster, destination):
 
 def solve_vrp_ortools(employes, destination, capacites_flotte, time_limit_sec=30):
     """
-    Solveur VRP complet avec OR-Tools.
-    capacites_flotte : entier (capacite uniforme) ou liste (flotte heterogene).
+    Solveur VRP avec OR-Tools + Dépôt Fictif (Dummy Node).
+    
+    Le Dépôt Fictif permet aux véhicules de "démarrer" virtuellement à coût 0,
+    éliminant le biais qui forçait des zigzags pour éviter les trajets "à vide".
+    Les véhicules terminent tous à la destination réelle.
+    
+    capacites_flotte : entier (capacité uniforme) ou liste (flotte hétérogène).
     """
     from ortools.constraint_solver import routing_enums_pb2, pywrapcp
     import requests
- 
-    nodes = employes + [destination]
-    dest_idx = len(nodes) - 1
+
     n_employees = len(employes)
- 
-    # --- Normalisation : toujours travailler avec une liste de capacites ---
+
+    # --- Construction de la liste de nœuds : employés + destination + dummy ---
+    # nodes = [emp0, emp1, ..., empN-1, destination, dummy_start]
+    nodes = employes + [destination]
+    dest_idx = len(nodes) - 1       # index de la destination dans nodes
+    dummy_idx = len(nodes)           # index du dépôt fictif (virtuel, pas dans nodes)
+    total_nodes = len(nodes) + 1     # +1 pour le dummy
+
+    # --- Normalisation : toujours travailler avec une liste de capacités ---
     if isinstance(capacites_flotte, int):
         capacites_vehicules = [capacites_flotte] * n_employees
     else:
         capacites_vehicules = list(capacites_flotte)
         while sum(capacites_vehicules) < n_employees:
             capacites_vehicules.append(1)
- 
+
     max_vehicles = len(capacites_vehicules)
- 
+
     # --- Matrice OSRM (ou fallback ML/Haversine) ---
+    # On ne demande la matrice OSRM que pour les nœuds réels (employés + destination)
     dist_matrix = None
     try:
         coords = ";".join([f"{n['lng']},{n['lat']}" for n in nodes])
         url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=distance"
-        resp = requests.get(url, timeout=8)
+        resp = requests.get(url, timeout=10)
         if resp.status_code == 200:
             dist_matrix = resp.json().get('distances')
     except Exception:
         pass
- 
-    def get_dist(i, j):
-        if dist_matrix and dist_matrix[i] and dist_matrix[i][j] is not None:
-            return int(dist_matrix[i][j])
+
+    def get_real_dist(i, j):
+        """Distance entre deux nœuds réels (pas le dummy)."""
+        if dist_matrix and i < len(dist_matrix) and j < len(dist_matrix):
+            if dist_matrix[i] and dist_matrix[i][j] is not None:
+                return int(dist_matrix[i][j])
         a, b = nodes[i], nodes[j]
         dist_km = estimer_distance_fallback(a['lat'], a['lng'], b['lat'], b['lng'])
         return int(dist_km * 1000)
- 
-    # --- Modèle OR-Tools ---
-    manager = pywrapcp.RoutingIndexManager(len(nodes), max_vehicles, dest_idx)
+
+    # --- Modèle OR-Tools avec Dépôt Fictif ---
+    # Chaque véhicule PART du dummy_idx (coût 0) et ARRIVE à dest_idx
+    starts = [dummy_idx] * max_vehicles
+    ends = [dest_idx] * max_vehicles
+    manager = pywrapcp.RoutingIndexManager(total_nodes, max_vehicles, starts, ends)
     routing = pywrapcp.RoutingModel(manager)
- 
-    # Fonction de coût basée UNIQUEMENT sur la distance réelle (OSRM)
-    # On supprime les pénalités fictives pour viser la distance minimale absolue.
+
     def dist_callback(from_idx, to_idx):
         from_node = manager.IndexToNode(from_idx)
-        to_node   = manager.IndexToNode(to_idx)
-        return get_dist(from_node, to_node)
+        to_node = manager.IndexToNode(to_idx)
+        # Si on part du dummy, distance = 0 (le taxi "apparaît" chez le 1er employé)
+        if from_node == dummy_idx:
+            return 0
+        # Si on va vers le dummy (ne devrait pas arriver, mais sécurité)
+        if to_node == dummy_idx:
+            return 0
+        return get_real_dist(from_node, to_node)
 
     transit_cb = routing.RegisterTransitCallback(dist_callback)
     routing.SetArcCostEvaluatorOfAllVehicles(transit_cb)
 
-    # On garde un très petit coût fixe (ex: 500m) juste pour éviter que 
-    # OR-Tools ouvre 50 taxis vides pour rien, mais assez petit pour ne 
-    # pas bloquer l'ouverture d'un taxi si ça réduit la distance globale.
-    COUT_FIXE_M = 500  # 0.5 km fictifs par taxi ouvert
+    # Coût fixe par véhicule : très petit (500m = 0.5 km) pour ne pas bloquer
+    # l'ouverture de nouveaux taxis quand c'est nécessaire, mais suffisant
+    # pour éviter d'ouvrir des taxis vides inutilement.
+    COUT_FIXE_M = 500
     for v in range(max_vehicles):
         routing.SetFixedCostOfVehicle(COUT_FIXE_M, v)
- 
-    # --- Contrainte de capacité HETEROGENE (une valeur réelle par vehicule) ---
+
+    # --- Contrainte de capacité hétérogène ---
     def demand_callback(idx):
         node = manager.IndexToNode(idx)
         return 1 if node < n_employees else 0
- 
+
     demand_cb = routing.RegisterUnaryTransitCallback(demand_callback)
     routing.AddDimensionWithVehicleCapacity(
         demand_cb, 0, capacites_vehicules, True, "Capacity"
     )
-  
-    # --- Paramètres de recherche (validés empiriquement) ---
+
+    # --- Paramètres de recherche ---
     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
     search_parameters.first_solution_strategy = (
-        routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+        routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
     )
     search_parameters.local_search_metaheuristic = (
         routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
     )
-    # On force au moins 60 secondes pour chercher l'optimum absolu
-    search_parameters.time_limit.seconds = max(60, time_limit_sec)
- 
+    # Temps de recherche généreux pour trouver le vrai minimum
+    search_parameters.time_limit.seconds = max(30, time_limit_sec)
+
     # --- Résolution ---
     solution = routing.SolveWithParameters(search_parameters)
     if not solution:
         print("[VRP] OR-Tools n'a pas trouvé de solution.")
         return None
- 
-    # --- Extraction des routes ---
+
     # --- Extraction des routes ---
     routes = []
     for vehicle_id in range(max_vehicles):
         index = routing.Start(vehicle_id)
-        if routing.IsEnd(index):
-            continue
         route_nodes = []
         while not routing.IsEnd(index):
             node_idx = manager.IndexToNode(index)
@@ -520,10 +537,13 @@ def solve_vrp_ortools(employes, destination, capacites_flotte, time_limit_sec=30
                 route_nodes.append(employes[node_idx])
             index = solution.Value(routing.NextVar(index))
         
-        # On ajoute la route telle que OR-Tools l'a calculée.
         if route_nodes:
+            # L'algorithme VRP avec Dummy Depot trouve déjà l'ordre absolu optimal 
+            # de la première prise en charge jusqu'à la destination.
+            # Il ne faut SURTOUT PAS faire de rotation manuelle, sinon on détruit 
+            # l'optimisation directionnelle (ex: forcer un demi-tour sur autoroute).
             routes.append(route_nodes)
- 
+
     print(f"   [VRP] {len(routes)} véhicules utilisés sur {max_vehicles} disponibles.")
     return routes
 
@@ -849,6 +869,7 @@ def optimiser_clusters_strategy(clusters, destination, strategy_name,
         min(100.0, (len(employes) / (len(vehicles_routes) * cap_for_calc)) * 100)
         if vehicles_routes else 0
     )
+
 
     rse_metrics = {
         'distance_saved_km':    round(max(0, distance_perso_totale  - total_distance_globale), 2),

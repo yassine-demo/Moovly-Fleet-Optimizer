@@ -419,7 +419,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const failures = json.geocode_failures || [];
                 updateGeocodeErrors(failures);
                 if (failures.length > 0) {
-                    showToast(failures.length + ' adresse(s) non trouvée(s) — voir l\'icône ⚠️', 'warning', 5000);
+                    showToast(failures.length + ' adresse(s) non trouvée(s), voir l\'icône ⚠️', 'warning', 5000);
                 }
             } catch (err) { showToast('Erreur: ' + err.message, 'error'); }
             hideLoading();
@@ -1621,7 +1621,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 padding: 12px 24px;
                 border-radius: 30px;
                 animation: popIn 0.3s ease-out;
-                margin-bottom: 40px;
+                margin-bottom: 50px;
             `;
             document.body.appendChild(btn);
 
@@ -1701,8 +1701,8 @@ document.addEventListener('DOMContentLoaded', () => {
     /* ══════════ CLIC POLYLINE ══════════ */
     window.handleRouteLineClick = function (route) {
         if (!optimizeResult || !optimizeResult.suggestions) return;
-        const suggestion = optimizeResult.suggestions[window.currentAlgoIndex || 0];
-        showRouteDetailsModal(route, suggestion.destination);
+        const destination = optimizeResult.suggestions[window.currentAlgoIndex || 0].destination;
+        showRouteDetailsModal(route, destination);
     };
 
     /* ══════════ ROI ANNUEL ══════════ */
@@ -1998,7 +1998,7 @@ document.querySelectorAll('.params-vehicle .v-input').forEach(input => {
 });
 
 // Simulateur live
-['p-pc','p-p79','p-p18','p-chp','p-cwe','p-mode'].forEach(id => {
+['p-pc','p-p79','p-p18','p-chp','p-cwe','p-mode', 'sim-dist', 'sim-dur'].forEach(id => {
     document.getElementById(id)?.addEventListener('input', simulateTarif);
 });
 
